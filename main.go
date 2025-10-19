@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	openai "github.com/openai/openai-go/v3"
 )
 
 type model struct {
 	conversation string
 	textarea     textarea.Model
+	client       openai.Client
+	chatModel    openai.ChatModel
 }
 
 func (m *model) Init() tea.Cmd {
@@ -24,6 +28,8 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
+	ctx := context.Background()
+
 	switch msg := teaMsg.(type) {
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -31,7 +37,15 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case tea.KeyEnter:
 			input := m.textarea.Value()
-			m.conversation = input
+
+			resp, _ := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+				Model: m.chatModel,
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.UserMessage(input),
+				},
+			})
+
+			m.conversation = resp.Choices[0].Message.Content
 		}
 
 	}
@@ -49,16 +63,26 @@ func (m *model) View() string {
 	return fmt.Sprintf("%s\n\n%s", m.textarea.View(), m.conversation)
 }
 
-func main() {
+func newModel() *model {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.Focus()
 	ta.Placeholder = "Send a message..."
 	ta.SetHeight(3)
 
-	p := tea.NewProgram(&model{
-		textarea: ta,
-	})
+	client := openai.NewClient()
+
+	return &model{
+		textarea:  ta,
+		client:    client,
+		chatModel: openai.ChatModelGPT3_5Turbo,
+	}
+}
+
+func main() {
+	model := newModel()
+
+	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
