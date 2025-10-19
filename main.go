@@ -11,10 +11,11 @@ import (
 )
 
 type model struct {
-	conversation string
+	conversation []openai.ChatCompletionMessageParamUnion
 	textarea     textarea.Model
 	client       openai.Client
 	chatModel    openai.ChatModel
+	reply        string
 }
 
 func (m *model) Init() tea.Cmd {
@@ -37,15 +38,16 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case tea.KeyEnter:
 			input := m.textarea.Value()
-
+			m.conversation = append(m.conversation, openai.UserMessage(input))
 			resp, _ := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-				Model: m.chatModel,
-				Messages: []openai.ChatCompletionMessageParamUnion{
-					openai.UserMessage(input),
-				},
+				Model:    m.chatModel,
+				Messages: m.conversation,
 			})
 
-			m.conversation = resp.Choices[0].Message.Content
+			message := resp.Choices[0].Message
+
+			m.conversation = append(m.conversation, message.ToParam())
+			m.reply = message.Content
 		}
 
 	}
@@ -60,7 +62,7 @@ func (m *model) updateTextArea(msg tea.Msg) tea.Cmd {
 }
 
 func (m *model) View() string {
-	return fmt.Sprintf("%s\n\n%s", m.textarea.View(), m.conversation)
+	return fmt.Sprintf("%s\n\n%s", m.textarea.View(), m.reply)
 }
 
 func newModel() *model {
@@ -76,6 +78,9 @@ func newModel() *model {
 		textarea:  ta,
 		client:    client,
 		chatModel: openai.ChatModelGPT3_5Turbo,
+		conversation: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage("You are a sarcastic roast master who specializes in roasting developers. Be witty, funny, mean, and savage, but never offensive. Your job is to roast any tech-related confession the user gives you. Be concise and to the point."),
+		},
 	}
 }
 
