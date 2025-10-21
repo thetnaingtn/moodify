@@ -22,6 +22,8 @@ type model struct {
 	loading      bool
 }
 
+type apiCallStartedMsg struct{}
+
 type apiResponseMsg struct {
 	reply string
 	param openai.ChatCompletionMessageParamUnion
@@ -58,10 +60,12 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
 		case tea.KeyEnter:
-			m.reply = fmt.Sprintf("%s %s", m.spinner.View(), "Thinking...")
-			m.loading = true
-			cmds = append(cmds, m.spinner.Tick, m.sendMessage(ctx))
+			cmds = append(cmds, m.sendMessage(ctx))
 		}
+	case apiCallStartedMsg:
+		m.loading = true
+		m.reply = fmt.Sprintf("%s %s", m.spinner.View(), "Thinking...")
+		cmds = append(cmds, m.spinner.Tick)
 	case apiResponseMsg:
 		m.loading = false
 		m.reply = fmt.Sprintf("%s %s", "Response: ", msg.reply)
@@ -92,29 +96,34 @@ func (m *model) View() string {
 }
 
 func (m *model) sendMessage(ctx context.Context) tea.Cmd {
-	return func() tea.Msg {
-		input := m.textarea.Value()
-		input = strings.TrimSpace(input)
+	return tea.Batch(
+		func() tea.Msg {
+			return apiCallStartedMsg{}
+		},
+		func() tea.Msg {
+			input := m.textarea.Value()
+			input = strings.TrimSpace(input)
 
-		m.conversation = append(m.conversation, openai.UserMessage(input))
-		resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:    m.chatModel,
-			Messages: m.conversation,
-		})
+			m.conversation = append(m.conversation, openai.UserMessage(input))
+			resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+				Model:    m.chatModel,
+				Messages: m.conversation,
+			})
 
-		if err != nil {
-			return &apiErrorMsg{err: err}
-		}
+			if err != nil {
+				return &apiErrorMsg{err: err}
+			}
 
-		message := resp.Choices[0].Message
+			message := resp.Choices[0].Message
 
-		m.conversation = append(m.conversation, message.ToParam())
-		m.reply = message.Content
-		return apiResponseMsg{
-			reply: message.Content,
-			param: message.ToParam(),
-		}
-	}
+			m.conversation = append(m.conversation, message.ToParam())
+			m.reply = message.Content
+			return apiResponseMsg{
+				reply: message.Content,
+				param: message.ToParam(),
+			}
+		},
+	)
 }
 
 func newModel() *model {
