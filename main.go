@@ -8,7 +8,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	openai "github.com/openai/openai-go/v3"
 )
 
@@ -20,6 +22,9 @@ type model struct {
 	spinner      spinner.Model
 	reply        string
 	loading      bool
+	offset       int
+	messages     []chatEntry
+	viewport     viewport.Model
 }
 
 type apiCallStartedMsg struct{}
@@ -27,6 +32,12 @@ type apiCallStartedMsg struct{}
 type apiResponseMsg struct {
 	reply string
 	param openai.ChatCompletionMessageParamUnion
+}
+
+type chatEntry struct {
+	content string
+	sender  string
+	loading bool
 }
 
 type apiErrorMsg struct {
@@ -52,23 +63,50 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
+	if cmd := m.updateViewport(teaMsg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	ctx := context.Background()
 
 	switch msg := teaMsg.(type) {
+	case tea.WindowSizeMsg:
+		m.viewport.Width = msg.Width
+		m.textarea.SetWidth(msg.Width)
+		m.viewport.Height = msg.Height - m.textarea.Height() - lipgloss.Height("\n\n")
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
 		case tea.KeyEnter:
+			m.messages = append(m.messages, chatEntry{
+				sender:  "You",
+				content: m.textarea.Value(),
+			})
 			cmds = append(cmds, m.sendMessage(ctx))
+			m.refreshViewport()
+			m.textarea.SetValue("")
 		}
 	case apiCallStartedMsg:
 		m.loading = true
-		m.reply = fmt.Sprintf("%s %s", m.spinner.View(), "Thinking...")
+		m.offset = len(m.messages)
+		m.messages = append(m.messages, chatEntry{
+			loading: true,
+			sender:  "Roast Master",
+			content: fmt.Sprintf("%s %s", m.spinner.View(), "Thinking..."),
+		})
 		cmds = append(cmds, m.spinner.Tick)
+		m.refreshViewport()
 	case apiResponseMsg:
 		m.loading = false
-		m.reply = fmt.Sprintf("%s %s", "Response: ", msg.reply)
+		if m.offset >= 0 && m.offset < len(m.messages) {
+			m.messages[m.offset] = chatEntry{
+				sender:  "Roast Master",
+				content: msg.reply,
+			}
+		}
+
+		m.refreshViewport()
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -91,8 +129,28 @@ func (m *model) updateSpinner(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+func (m *model) updateViewport(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.viewport, cmd = m.viewport.Update(msg)
+	return cmd
+}
+
+func (m *model) refreshViewport() {
+	lines := make([]string, 0, len(m.messages))
+
+	for _, entry := range m.messages {
+		lines = append(lines, fmt.Sprintf("%s: %s", entry.sender, entry.content))
+	}
+
+	if len(lines) < 1 {
+		return
+	}
+
+	m.viewport.SetContent(strings.Join(lines, "\n"))
+}
+
 func (m *model) View() string {
-	return fmt.Sprintf("%s\n\n%s", m.textarea.View(), m.reply)
+	return fmt.Sprintf("%s\n\n%s", m.viewport.View(), m.textarea.View())
 }
 
 func (m *model) sendMessage(ctx context.Context) tea.Cmd {
@@ -133,16 +191,20 @@ func newModel() *model {
 	ta.Placeholder = "Send a message..."
 	ta.SetHeight(3)
 
-	client := openai.NewClient()
-
 	sp := spinner.New()
 	sp.Spinner = spinner.Points
 
+	vp := viewport.New(30, 10)
+	vp.SetContent("Welcome to the Roast Master! Type your tech-related confession below and hit Enter to receive a savage roast.")
+
+	client := openai.NewClient()
 	return &model{
 		textarea:  ta,
 		client:    client,
 		chatModel: openai.ChatModelGPT3_5Turbo,
 		spinner:   sp,
+		viewport:  vp,
+		offset:    -1,
 		conversation: []openai.ChatCompletionMessageParamUnion{
 			openai.SystemMessage("You are a sarcastic roast master who specializes in roasting developers. Be witty, funny, mean, and savage, but never offensive. Your job is to roast any tech-related confession the user gives you. Be concise and to the point."),
 		},
@@ -153,7 +215,6 @@ func main() {
 	model := newModel()
 
 	p := tea.NewProgram(model)
-
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
 	}
