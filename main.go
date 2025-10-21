@@ -85,7 +85,6 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			cmds = append(cmds, m.sendMessage(ctx))
 			m.refreshViewport()
-			m.textarea.SetValue("")
 		}
 	case apiCallStartedMsg:
 		m.loading = true
@@ -93,7 +92,7 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, chatEntry{
 			loading: true,
 			sender:  "Roast Master",
-			content: fmt.Sprintf("%s %s", m.spinner.View(), "Thinking..."),
+			content: "Thinking",
 		})
 		cmds = append(cmds, m.spinner.Tick)
 		m.refreshViewport()
@@ -101,6 +100,7 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		if m.offset >= 0 && m.offset < len(m.messages) {
 			m.messages[m.offset] = chatEntry{
+				loading: false,
 				sender:  "Roast Master",
 				content: msg.reply,
 			}
@@ -122,8 +122,8 @@ func (m *model) updateSpinner(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.spinner, cmd = m.spinner.Update(msg)
 
-	if _, ok := msg.(spinner.TickMsg); ok && m.loading {
-		m.reply = fmt.Sprintf("%s %s", m.spinner.View(), "Thinking...") // update reply with new spinner frame
+	if _, ok := msg.(spinner.TickMsg); ok && m.messages[m.offset].loading {
+		m.refreshViewport()
 	}
 
 	return cmd
@@ -139,7 +139,12 @@ func (m *model) refreshViewport() {
 	lines := make([]string, 0, len(m.messages))
 
 	for _, entry := range m.messages {
-		lines = append(lines, fmt.Sprintf("%s: %s", entry.sender, entry.content))
+		content := entry.content
+		if entry.loading {
+			content = fmt.Sprintf("%s %s", entry.content, m.spinner.View())
+		}
+
+		lines = append(lines, fmt.Sprintf("%s: %s", entry.sender, content))
 	}
 
 	if len(lines) < 1 {
