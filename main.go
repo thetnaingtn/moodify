@@ -89,13 +89,13 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
 		case tea.KeyEnter:
-			m.messages = append(m.messages, chatEntry{
-				sender:  userLabel,
-				content: m.textarea.Value(),
-			})
-			cmds = append(cmds, m.sendMessage(ctx))
-			m.textarea.Reset()
-			m.refreshViewport()
+			if !m.loading {
+				cmd := m.handleUserSubmit(ctx)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
+
 		}
 	case apiCallStartedMsg:
 		m.loading = true
@@ -180,16 +180,30 @@ func (m *model) View() string {
 	return fmt.Sprintf("%s\n\n%s", m.viewport.View(), m.textarea.View())
 }
 
+func (m *model) handleUserSubmit(ctx context.Context) tea.Cmd {
+	input := strings.TrimSpace(m.textarea.Value())
+	if input == "" {
+		return nil
+	}
+
+	m.messages = append(m.messages, chatEntry{
+		sender:  userLabel,
+		content: input,
+	})
+	m.conversation = append(m.conversation, openai.UserMessage(input))
+	m.textarea.Reset()
+	m.refreshViewport()
+	m.viewport.GotoBottom()
+
+	return m.sendMessage(ctx)
+}
+
 func (m *model) sendMessage(ctx context.Context) tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg {
 			return apiCallStartedMsg{}
 		},
 		func() tea.Msg {
-			input := m.textarea.Value()
-			input = strings.TrimSpace(input)
-
-			m.conversation = append(m.conversation, openai.UserMessage(input))
 			resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 				Model:    m.chatModel,
 				Messages: m.conversation,
