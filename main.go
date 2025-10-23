@@ -14,6 +14,16 @@ import (
 	openai "github.com/openai/openai-go/v3"
 )
 
+var (
+	userLabel      = "You"
+	assistantLabel = "🤖"
+
+	neonPink     = lipgloss.Color("#FF2E63")
+	electricBlue = lipgloss.Color("#08D9D6")
+	purpleMist   = lipgloss.Color("#A239CA")
+	neonYellow   = lipgloss.Color("#F8E71C")
+)
+
 type model struct {
 	conversation []openai.ChatCompletionMessageParamUnion
 	textarea     textarea.Model
@@ -80,10 +90,11 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case tea.KeyEnter:
 			m.messages = append(m.messages, chatEntry{
-				sender:  "You",
+				sender:  userLabel,
 				content: m.textarea.Value(),
 			})
 			cmds = append(cmds, m.sendMessage(ctx))
+			m.textarea.Reset()
 			m.refreshViewport()
 		}
 	case apiCallStartedMsg:
@@ -91,7 +102,7 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		m.offset = len(m.messages)
 		m.messages = append(m.messages, chatEntry{
 			loading: true,
-			sender:  "Roast Master",
+			sender:  assistantLabel,
 			content: "Thinking",
 		})
 		cmds = append(cmds, m.spinner.Tick)
@@ -101,7 +112,7 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.offset >= 0 && m.offset < len(m.messages) {
 			m.messages[m.offset] = chatEntry{
 				loading: false,
-				sender:  "Roast Master",
+				sender:  assistantLabel,
 				content: msg.reply,
 			}
 		}
@@ -138,13 +149,23 @@ func (m *model) updateViewport(msg tea.Msg) tea.Cmd {
 func (m *model) refreshViewport() {
 	lines := make([]string, 0, len(m.messages))
 
+	textWidth := lipgloss.NewStyle().Width(m.viewport.Width)
+
 	for _, entry := range m.messages {
 		content := entry.content
 		if entry.loading {
 			content = fmt.Sprintf("%s %s", entry.content, m.spinner.View())
 		}
 
-		lines = append(lines, fmt.Sprintf("%s: %s", entry.sender, content))
+		switch entry.sender {
+		case userLabel:
+			content = lipgloss.NewStyle().Foreground(neonYellow).Render(content)
+		case assistantLabel:
+			content = lipgloss.NewStyle().Foreground(neonPink).Render(content)
+		default:
+		}
+
+		lines = append(lines, textWidth.Render(fmt.Sprintf("%s: %s", entry.sender, content)))
 	}
 
 	if len(lines) < 1 {
@@ -152,6 +173,7 @@ func (m *model) refreshViewport() {
 	}
 
 	m.viewport.SetContent(strings.Join(lines, "\n"))
+	m.viewport.GotoBottom()
 }
 
 func (m *model) View() string {
@@ -195,9 +217,15 @@ func newModel() *model {
 	ta.Focus()
 	ta.Placeholder = "Send a message..."
 	ta.SetHeight(3)
+	ta.SetWidth(30)
+	ta.Prompt = "┃ "
+	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(electricBlue)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Foreground(electricBlue)
+	ta.KeyMap.InsertNewline.SetEnabled(false)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Points
+	sp.Style = lipgloss.NewStyle().Foreground(electricBlue)
 
 	vp := viewport.New(30, 10)
 	vp.SetContent("Welcome to the Roast Master! Type your tech-related confession below and hit Enter to receive a savage roast.")
