@@ -20,6 +20,20 @@ var (
 	neonPink     = lipgloss.Color("#FF2E63")
 	electricBlue = lipgloss.Color("#08D9D6")
 	neonYellow   = lipgloss.Color("#F8E71C")
+
+	errorRed = lipgloss.Color("#FF355E")
+)
+
+var (
+	errorMessage = `
+Error: Connection to moodify engine lost.
+Possible causes:
+ - You hurt its feelings.
+ - Network ghosts intercepted packets.
+ - It just needed a nap.
+
+Try again later, or say something nice.
+`
 )
 
 type model struct {
@@ -30,6 +44,7 @@ type model struct {
 	messages []chatEntry
 	viewport viewport.Model
 	session  chat.Session
+	err      error
 }
 
 type apiCallStartedMsg struct{}
@@ -112,6 +127,11 @@ func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.refreshViewport()
+	case *apiErrorMsg:
+		m.loading = false
+		m.err = msg.err
+		m.refreshViewport()
+		cmds = append(cmds, tea.Quit)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -141,6 +161,11 @@ func (m *model) updateViewport(msg tea.Msg) tea.Cmd {
 }
 
 func (m *model) refreshViewport() {
+	if m.err != nil {
+		m.viewport.SetContent(lipgloss.NewStyle().Foreground(errorRed).Render(errorMessage))
+		return
+	}
+
 	lines := make([]string, 0, len(m.messages))
 
 	textWidth := lipgloss.NewStyle().Width(m.viewport.Width)

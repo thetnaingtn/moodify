@@ -2,6 +2,7 @@ package gpt
 
 import (
 	"context"
+	"log"
 
 	"github.com/openai/openai-go/v3"
 )
@@ -33,6 +34,7 @@ func (m *Model) SendMessage(ctx context.Context, message string) (string, error)
 	})
 
 	if err != nil {
+		log.Println("Error sending message: ", err)
 		return "", err
 	}
 
