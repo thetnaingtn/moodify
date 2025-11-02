@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/openai/openai-go/v3"
 	"github.com/spf13/cobra"
+	"github.com/thetnaingtn/moodify/chat/gpt"
 	"github.com/thetnaingtn/moodify/ui"
 )
 
@@ -24,8 +25,9 @@ func roastRunE(cmd *cobra.Command, args []string) error {
 	client := openai.NewClient()
 
 	ctx := context.Background()
+	model := gpt.NewModel(client, openai.ChatModelGPT3_5Turbo, roastInstruction)
 
-	p := tea.NewProgram(ui.NewModel(ctx, client, roastInstruction, openai.ChatModelGPT3_5Turbo))
+	p := tea.NewProgram(ui.NewModel(ctx, model))
 	if _, err := p.Run(); err != nil {
 		return err
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	openai "github.com/openai/openai-go/v3"
+	"github.com/thetnaingtn/moodify/chat"
 )
 
 var (
@@ -23,23 +23,19 @@ var (
 )
 
 type model struct {
-	conversation []openai.ChatCompletionMessageParamUnion
-	textarea     textarea.Model
-	client       openai.Client
-	chatModel    openai.ChatModel
-	spinner      spinner.Model
-	reply        string
-	loading      bool
-	offset       int
-	messages     []chatEntry
-	viewport     viewport.Model
+	textarea textarea.Model
+	spinner  spinner.Model
+	loading  bool
+	offset   int
+	messages []chatEntry
+	viewport viewport.Model
+	session  chat.Session
 }
 
 type apiCallStartedMsg struct{}
 
 type apiResponseMsg struct {
 	reply string
-	param openai.ChatCompletionMessageParamUnion
 }
 
 type chatEntry struct {
@@ -188,42 +184,33 @@ func (m *model) handleUserSubmit(ctx context.Context) tea.Cmd {
 		sender:  userLabel,
 		content: input,
 	})
-	m.conversation = append(m.conversation, openai.UserMessage(input))
+
 	m.textarea.Reset()
 	m.refreshViewport()
 	m.viewport.GotoBottom()
 
-	return m.sendMessage(ctx)
+	return m.sendMessage(ctx, input)
 }
 
-func (m *model) sendMessage(ctx context.Context) tea.Cmd {
+func (m *model) sendMessage(ctx context.Context, msg string) tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg {
 			return apiCallStartedMsg{}
 		},
 		func() tea.Msg {
-			resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-				Model:    m.chatModel,
-				Messages: m.conversation,
-			})
+			reply, err := m.session.SendMessage(ctx, msg)
 
 			if err != nil {
 				return &apiErrorMsg{err: err}
 			}
-
-			message := resp.Choices[0].Message
-
-			m.conversation = append(m.conversation, message.ToParam())
-			m.reply = message.Content
 			return apiResponseMsg{
-				reply: message.Content,
-				param: message.ToParam(),
+				reply: reply,
 			}
 		},
 	)
 }
 
-func NewModel(ctx context.Context, client openai.Client, instruction string, chatModel string) *model {
+func NewModel(ctx context.Context, session chat.Session) *model {
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
 	ta.Focus()
@@ -243,14 +230,10 @@ func NewModel(ctx context.Context, client openai.Client, instruction string, cha
 	vp.SetContent("Welcome to the Roast Master! Type your tech-related confession below and hit Enter to receive a savage roast.")
 
 	return &model{
-		textarea:  ta,
-		client:    client,
-		chatModel: openai.ChatModelGPT3_5Turbo,
-		spinner:   sp,
-		viewport:  vp,
-		offset:    -1,
-		conversation: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(instruction),
-		},
+		session:  session,
+		textarea: ta,
+		spinner:  sp,
+		viewport: vp,
+		offset:   -1,
 	}
 }

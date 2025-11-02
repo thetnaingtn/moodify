@@ -6,6 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/openai/openai-go/v3"
 	"github.com/spf13/cobra"
+	"github.com/thetnaingtn/moodify/chat/gpt"
 	"github.com/thetnaingtn/moodify/ui"
 )
 
@@ -25,7 +26,9 @@ func praiseRunE(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	p := tea.NewProgram(ui.NewModel(ctx, client, praiseInstruction, openai.ChatModelGPT3_5Turbo))
+	model := gpt.NewModel(client, openai.ChatModelGPT3_5Turbo, praiseInstruction)
+
+	p := tea.NewProgram(ui.NewModel(ctx, model))
 	if _, err := p.Run(); err != nil {
 		return err
 	}
