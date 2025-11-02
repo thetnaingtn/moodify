@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -14,216 +13,172 @@ import (
 	openai "github.com/openai/openai-go/v3"
 )
 
-const (
-	gap            = "\n\n"
+var (
 	userLabel      = "You"
-	assistantLabel = "Assistant"
-	thinkingText   = "Thinking…"
+	assistantLabel = "🤖"
+
+	neonPink     = lipgloss.Color("#FF2E63")
+	electricBlue = lipgloss.Color("#08D9D6")
+	neonYellow   = lipgloss.Color("#F8E71C")
 )
 
-type chatEntry struct {
-	sender  string
-	content string
-	loading bool
+type model struct {
+	conversation []openai.ChatCompletionMessageParamUnion
+	textarea     textarea.Model
+	client       openai.Client
+	chatModel    openai.ChatModel
+	spinner      spinner.Model
+	reply        string
+	loading      bool
+	offset       int
+	messages     []chatEntry
+	viewport     viewport.Model
 }
 
 type apiCallStartedMsg struct{}
 
 type apiResponseMsg struct {
+	reply string
+	param openai.ChatCompletionMessageParamUnion
+}
+
+type chatEntry struct {
 	content string
-	param   openai.ChatCompletionMessageParamUnion
+	sender  string
+	loading bool
 }
 
 type apiErrorMsg struct {
 	err error
 }
 
-type errMsg struct {
-	err error
+func (e *apiErrorMsg) Error() string {
+	return e.err.Error()
 }
 
-func (m errMsg) Error() string {
-	if m.err == nil {
-		return ""
-	}
-	return m.err.Error()
+func (m *model) Init() tea.Cmd {
+	return m.textarea.Cursor.BlinkCmd()
 }
 
-// Model implements the Bubble Tea chat UI backed by OpenAI responses.
-type Model struct {
-	ctx            context.Context
-	client         openai.Client
-	model          openai.ChatModel
-	conversation   []openai.ChatCompletionMessageParamUnion
-	viewport       viewport.Model
-	textarea       textarea.Model
-	spinner        spinner.Model
-	messages       []chatEntry
-	pendingIndex   int
-	loading        bool
-	senderStyle    lipgloss.Style
-	assistantStyle lipgloss.Style
-	errorStyle     lipgloss.Style
-}
-
-// NewModel sets up the chat UI and primes the OpenAI conversation with the optional
-// systemInstruction. The provided context must remain valid for the life of the model.
-func NewModel(ctx context.Context, client openai.Client, systemInstruction string, model openai.ChatModel) *Model {
-	ta := textarea.New()
-	ta.Placeholder = "Send a message..."
-	ta.Focus()
-	ta.Prompt = "┃ "
-	ta.CharLimit = 1024
-	ta.SetWidth(30)
-	ta.SetHeight(3)
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetEnabled(false)
-
-	vp := viewport.New(30, 10)
-	vp.SetContent(`Welcome to the OpenAI chat.
-Type a message and press Enter to send.`)
-
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-
-	var conversation []openai.ChatCompletionMessageParamUnion
-	if systemInstruction != "" {
-		conversation = append(conversation, openai.SystemMessage(systemInstruction))
-	}
-
-	return &Model{
-		ctx:            ctx,
-		client:         client,
-		model:          model,
-		conversation:   conversation,
-		viewport:       vp,
-		textarea:       ta,
-		spinner:        sp,
-		messages:       []chatEntry{},
-		pendingIndex:   -1,
-		senderStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("5")),
-		assistantStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		errorStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
-	}
-}
-
-func (m *Model) Init() tea.Cmd {
-	return textarea.Blink
-}
-
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(teaMsg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	if textareaCmd := m.updateTextarea(msg); textareaCmd != nil {
-		cmds = append(cmds, textareaCmd)
+	if cmd := m.updateTextArea(teaMsg); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
-	if viewportCmd := m.updateViewportModel(msg); viewportCmd != nil {
-		cmds = append(cmds, viewportCmd)
+	if cmd := m.updateSpinner(teaMsg); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
-	if spinnerCmd := m.updateSpinner(msg); spinnerCmd != nil {
-		cmds = append(cmds, spinnerCmd)
+	if cmd := m.updateViewport(teaMsg); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 
-	switch typed := msg.(type) {
+	ctx := context.Background()
+
+	switch msg := teaMsg.(type) {
 	case tea.WindowSizeMsg:
-		m.viewport.Width = typed.Width
-		m.textarea.SetWidth(typed.Width)
-		m.viewport.Height = typed.Height - m.textarea.Height() - lipgloss.Height(gap)
-		m.refreshViewport()
+		m.viewport.Width = msg.Width
+		m.textarea.SetWidth(msg.Width)
+		m.viewport.Height = msg.Height - m.textarea.Height() - lipgloss.Height("\n\n")
 	case tea.KeyMsg:
-		switch typed.Type {
+		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
 			return m, tea.Quit
 		case tea.KeyEnter:
 			if !m.loading {
-				cmd := m.handleUserSubmit()
+				cmd := m.handleUserSubmit(ctx)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 			}
+
 		}
 	case apiCallStartedMsg:
 		m.loading = true
-		m.pendingIndex = len(m.messages)
+		m.offset = len(m.messages)
 		m.messages = append(m.messages, chatEntry{
-			sender:  assistantLabel,
-			content: thinkingText,
 			loading: true,
+			sender:  assistantLabel,
+			content: "Thinking",
 		})
 		cmds = append(cmds, m.spinner.Tick)
 		m.refreshViewport()
 	case apiResponseMsg:
 		m.loading = false
-		if m.pendingIndex >= 0 && m.pendingIndex < len(m.messages) {
-			m.messages[m.pendingIndex].content = typed.content
-			m.messages[m.pendingIndex].loading = false
-		}
-		m.pendingIndex = -1
-		m.conversation = append(m.conversation, typed.param)
-		m.refreshViewport()
-	case apiErrorMsg:
-		m.loading = false
-		errorText := "Something went wrong."
-		if typed.err != nil {
-			errorText = typed.err.Error()
-		}
-		if m.pendingIndex >= 0 && m.pendingIndex < len(m.messages) {
-			m.messages[m.pendingIndex] = chatEntry{
-				sender:  assistantLabel,
-				content: errorText,
+		if m.offset >= 0 && m.offset < len(m.messages) {
+			m.messages[m.offset] = chatEntry{
 				loading: false,
+				sender:  assistantLabel,
+				content: msg.reply,
 			}
-		} else {
-			m.messages = append(m.messages, chatEntry{
-				sender:  assistantLabel,
-				content: errorText,
-				loading: false,
-			})
 		}
-		m.pendingIndex = -1
-		m.refreshViewport()
-	case errMsg:
-		cmds = append(cmds, tea.Println(typed.Error()))
-	}
 
+		m.refreshViewport()
+	}
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) View() string {
-	return fmt.Sprintf(
-		"%s%s%s",
-		m.viewport.View(),
-		gap,
-		m.textarea.View(),
-	)
-}
-
-func (m *Model) updateTextarea(msg tea.Msg) tea.Cmd {
+func (m *model) updateTextArea(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
+
 	return cmd
 }
 
-func (m *Model) updateViewportModel(msg tea.Msg) tea.Cmd {
+func (m *model) updateSpinner(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.spinner, cmd = m.spinner.Update(msg)
+
+	if _, ok := msg.(spinner.TickMsg); ok && m.messages[m.offset].loading {
+		m.refreshViewport()
+	}
+
+	return cmd
+}
+
+func (m *model) updateViewport(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return cmd
 }
 
-func (m *Model) updateSpinner(msg tea.Msg) tea.Cmd {
-	var cmd tea.Cmd
-	m.spinner, cmd = m.spinner.Update(msg)
-	if _, ok := msg.(spinner.TickMsg); ok && m.loading {
-		m.refreshViewport()
+func (m *model) refreshViewport() {
+	lines := make([]string, 0, len(m.messages))
+
+	textWidth := lipgloss.NewStyle().Width(m.viewport.Width)
+
+	for _, entry := range m.messages {
+		content := entry.content
+		if entry.loading {
+			content = fmt.Sprintf("%s %s", entry.content, m.spinner.View())
+		}
+
+		switch entry.sender {
+		case userLabel:
+			content = lipgloss.NewStyle().Foreground(neonYellow).Render(content)
+		case assistantLabel:
+			content = lipgloss.NewStyle().Foreground(neonPink).Render(content)
+		default:
+		}
+
+		lines = append(lines, textWidth.Render(fmt.Sprintf("%s: %s", entry.sender, content)))
 	}
-	return cmd
+
+	if len(lines) < 1 {
+		return
+	}
+
+	m.viewport.SetContent(strings.Join(lines, "\n"))
+	m.viewport.GotoBottom()
 }
 
-func (m *Model) handleUserSubmit() tea.Cmd {
+func (m *model) View() string {
+	return fmt.Sprintf("%s\n\n%s", m.viewport.View(), m.textarea.View())
+}
+
+func (m *model) handleUserSubmit(ctx context.Context) tea.Cmd {
 	input := strings.TrimSpace(m.textarea.Value())
 	if input == "" {
 		return nil
@@ -238,73 +193,64 @@ func (m *Model) handleUserSubmit() tea.Cmd {
 	m.refreshViewport()
 	m.viewport.GotoBottom()
 
-	return m.callOpenAI()
+	return m.sendMessage(ctx)
 }
 
-func (m *Model) refreshViewport() {
-	if m.viewport.Width <= 0 {
-		return
-	}
-
-	wrapper := lipgloss.NewStyle().Width(m.viewport.Width)
-	lines := make([]string, 0, len(m.messages))
-
-	for _, entry := range m.messages {
-		content := entry.content
-		if entry.loading {
-			content = fmt.Sprintf("%s %s", m.spinner.View(), content)
-		}
-
-		line := fmt.Sprintf("%s: %s", entry.sender, content)
-		switch entry.sender {
-		case userLabel:
-			line = m.senderStyle.Render(line)
-		case assistantLabel:
-			if entry.loading {
-				line = m.assistantStyle.Render(line)
-			} else {
-				line = m.assistantStyle.Render(line)
-			}
-		default:
-			line = wrapper.Render(line)
-		}
-
-		if entry.sender == assistantLabel && !entry.loading && strings.Contains(strings.ToLower(content), "error") {
-			line = m.errorStyle.Render(line)
-		}
-
-		lines = append(lines, wrapper.Render(line))
-	}
-
-	if len(lines) == 0 {
-		return
-	}
-
-	m.viewport.SetContent(strings.Join(lines, "\n"))
-	m.viewport.GotoBottom()
-}
-
-func (m *Model) callOpenAI() tea.Cmd {
-	messagesCopy := append([]openai.ChatCompletionMessageParamUnion(nil), m.conversation...)
-
+func (m *model) sendMessage(ctx context.Context) tea.Cmd {
 	return tea.Batch(
-		func() tea.Msg { return apiCallStartedMsg{} },
 		func() tea.Msg {
-			resp, err := m.client.Chat.Completions.New(m.ctx, openai.ChatCompletionNewParams{
-				Messages: messagesCopy,
-				Model:    m.model,
+			return apiCallStartedMsg{}
+		},
+		func() tea.Msg {
+			resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+				Model:    m.chatModel,
+				Messages: m.conversation,
 			})
+
 			if err != nil {
-				return apiErrorMsg{err: err}
+				return &apiErrorMsg{err: err}
 			}
-			if len(resp.Choices) == 0 {
-				return apiErrorMsg{err: errors.New("no response from OpenAI")}
-			}
+
 			message := resp.Choices[0].Message
+
+			m.conversation = append(m.conversation, message.ToParam())
+			m.reply = message.Content
 			return apiResponseMsg{
-				content: message.Content,
-				param:   message.ToParam(),
+				reply: message.Content,
+				param: message.ToParam(),
 			}
 		},
 	)
+}
+
+func NewModel(ctx context.Context, client openai.Client, instruction string, chatModel string) *model {
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	ta.Focus()
+	ta.Placeholder = "Send a message..."
+	ta.SetHeight(3)
+	ta.SetWidth(30)
+	ta.Prompt = "┃ "
+	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(electricBlue)
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle().Foreground(electricBlue)
+	ta.KeyMap.InsertNewline.SetEnabled(false)
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Points
+	sp.Style = lipgloss.NewStyle().Foreground(electricBlue)
+
+	vp := viewport.New(30, 10)
+	vp.SetContent("Welcome to the Roast Master! Type your tech-related confession below and hit Enter to receive a savage roast.")
+
+	return &model{
+		textarea:  ta,
+		client:    client,
+		chatModel: openai.ChatModelGPT3_5Turbo,
+		spinner:   sp,
+		viewport:  vp,
+		offset:    -1,
+		conversation: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(instruction),
+		},
+	}
 }
