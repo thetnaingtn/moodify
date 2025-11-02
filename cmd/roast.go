@@ -27,6 +27,12 @@ func roastRunE(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	model := gpt.NewModel(client, openai.ChatModelGPT3_5Turbo, roastInstruction)
 
+	if debugFlag {
+		if _, err := tea.LogToFile("./moodify.log", ""); err != nil {
+			return err
+		}
+	}
+
 	p := tea.NewProgram(ui.NewModel(ctx, model))
 	if _, err := p.Run(); err != nil {
 		return err

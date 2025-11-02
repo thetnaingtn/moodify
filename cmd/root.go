@@ -8,11 +8,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var rootCmd = &cobra.Command{
-	Use: "moodify",
-}
+var (
+	debugFlag bool
+	rootCmd   = &cobra.Command{
+		Use: "moodify",
+	}
+)
 
 func init() {
+	rootCmd.PersistentFlags().BoolVarP(&debugFlag, "debug", "d", false, "Enable debug mode")
 	rootCmd.AddCommand(roastCmd, praiseCmd)
 }
 

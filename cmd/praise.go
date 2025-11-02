@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/openai/openai-go/v3"
@@ -27,6 +28,12 @@ func praiseRunE(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	model := gpt.NewModel(client, openai.ChatModelGPT3_5Turbo, praiseInstruction)
+
+	if debugFlag {
+		if _, err := tea.LogToFile(filepath.Join("./", "moodify.log"), ""); err != nil {
+			return err
+		}
+	}
 
 	p := tea.NewProgram(ui.NewModel(ctx, model))
 	if _, err := p.Run(); err != nil {
