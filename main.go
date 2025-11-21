@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -33,6 +34,10 @@ func (m *model) View() string {
 
 func main() {
 	m := newModel()
+
+	if _, err := tea.LogToFile(filepath.Join("./", "moodify.log"), ""); err != nil {
+		panic(err)
+	}
 
 	p := tea.NewProgram(m)
 
